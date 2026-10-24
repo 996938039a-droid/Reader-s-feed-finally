@@ -1,5 +1,5 @@
 import { isAuthorised } from './auth.js';
-import { missingConfig } from './config.js';
+import { backupConfigured, missingConfig } from './config.js';
 import { extractForReader, friendlyError, quickMeta } from './extract.js';
 import { harvest } from './feeds.js';
 import { processPending } from './queue.js';
@@ -43,7 +43,7 @@ export async function handle(req, deps) {
     if (method === 'GET' && path === 'auth') return json({ ok: true });
 
     if (method === 'GET' && path === 'health') {
-      const out = { ok: true, missing: missingConfig(cfg), model: gemini?.state?.model, sheet: 'unchecked', gemini: 'unchecked' };
+      const out = { ok: true, missing: missingConfig(cfg), model: gemini?.state?.model, backupAI: backupConfigured(cfg) ? 'configured' : 'not set (optional)', sheet: 'unchecked', gemini: 'unchecked' };
       try {
         await sheet.ping();
         out.sheet = 'ok';
@@ -122,14 +122,15 @@ export async function handle(req, deps) {
     }
 
     if (method === 'POST' && path === 'process') {
-      // One article, within a synchronous function's time limit.
+      // A small batch, so it fits a synchronous function's time limit. `elapsedMs` shows how close it was.
+      const body = await readBody(req);
+      const size = Math.min(6, Math.max(1, Number(body.batch) || cfg.manualBatch || 2));
       const summary = await processPending({
         sheet,
-        gemini,
+        classifier: deps.classifier,
         fetchImpl: deps.fetchImpl,
-        limit: 1,
+        limit: size,
         budgetMs: 8000,
-        perItemMs: 0,
         log,
       });
       return json({ ok: true, ...summary });

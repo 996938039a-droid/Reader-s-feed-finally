@@ -1,31 +1,61 @@
 import { RateLimitError } from './gemini.js';
 import { friendlyError, materialForClassification } from './extract.js';
 
+function fieldsFor(item, material, result) {
+  const fields = {
+    category: result.category || 'Uncategorised',
+    tags: result.tags,
+    format: result.format,
+    tldr: result.tldr,
+  };
+  const type = material.type || item.type || 'Article';
+  if (type !== item.type) fields.type = type;
+  if (item.last_error) fields.last_error = '';
+  if (material.readingMinutes) fields.reading_time = material.readingMinutes;
+  if (result.author) fields.author_source = result.author;
+  // Prefer the real title for PDFs and for rows saved with only a URL-derived title.
+  const betterTitle = (material.title || result.title || '').trim();
+  if (betterTitle && (!item.title || item.type === 'PDF' || item.title === item.url)) fields.title = betterTitle;
+  if (material.thin) {
+    const basis = material.text ? 'the feed summary' : 'the title only';
+    fields.last_error = material.fetchError
+      ? `Page unavailable (${material.fetchError}); classified from ${basis}.`
+      : 'Classified from a short excerpt (page text unavailable).';
+  }
+  return fields;
+}
+
 /**
- * Classify pending articles one at a time (the Sheet is the queue).
+ * Classify a batch of pending articles with ONE AI request (the Sheet is the queue).
  *
- * Safe against being killed mid-run: before an article is touched its attempt counter is
- * bumped, so an article that keeps crashing the function is skipped after 5 tries instead of
- * blocking the queue forever.
+ * Free AI tiers count requests, not articles, so sending several articles at once is what makes
+ * them last: 60 articles take ~10 requests instead of 60.
+ *
+ * Safe against being killed mid-run: before anything else each article's attempt counter is bumped,
+ * so an article that keeps crashing the function is skipped after 5 tries instead of blocking the queue.
+ * Running out of AI quota is not the article's fault: its attempt is given back.
  *
  * @param {object} o
- * @param {number} o.limit        max articles to take this run
- * @param {number} o.budgetMs     total time this invocation may use
- * @param {number} [o.perItemMs]  rough worst-case time one article needs (don't start another if it won't fit)
+ * @param {object} o.classifier  { classifyBatch(items, opts), classify(item, opts) }
+ * @param {number} o.limit       articles to take this run (sent to the AI together)
+ * @param {number} o.budgetMs    time this invocation may use (limits retry waiting)
  */
 export async function processPending({
   sheet,
-  gemini,
+  classifier,
   fetchImpl = fetch,
-  limit = 2,
+  limit = 5,
   budgetMs = 24000,
-  perItemMs = 11000,
   now = Date.now,
   log = () => {},
 }) {
   const started = now();
   const deadline = started + budgetMs;
-  const summary = { processed: 0, failed: 0, remaining: null, stopped: '' };
+  const summary = { processed: 0, failed: 0, remaining: null, stopped: '', elapsedMs: 0 };
+  const finish = () => {
+    summary.elapsedMs = now() - started;
+    return summary;
+  };
 
   // Ask for a few extra rows so we can report roughly how many are still waiting.
   const pending = (await sheet.pending(Math.max(limit, 1) + 25)).sort(
@@ -34,76 +64,95 @@ export async function processPending({
   );
   if (!pending.length) {
     summary.remaining = 0;
-    return summary;
+    return finish();
   }
-  const cats = await sheet.categories();
-  const categoryNames = cats.map((c) => c.name);
+  const batch = pending.slice(0, Math.max(limit, 1));
+  const attemptsBefore = new Map(batch.map((it) => [it.id, Number(it.classify_attempts) || 0]));
+  const categoryNames = (await sheet.categories()).map((c) => c.name);
 
-  for (const item of pending.slice(0, limit)) {
-    if (summary.processed + summary.failed > 0 && now() + perItemMs > deadline) {
-      summary.stopped = 'out of time';
-      break;
-    }
-    const attemptsBefore = Number(item.classify_attempts) || 0;
-    await sheet.updateArticle([{ id: item.id, fields: { classify_attempts: attemptsBefore + 1, last_error: 'in progress' } }]);
+  await sheet.updateArticle(batch.map((it) => ({ id: it.id, fields: { classify_attempts: attemptsBefore.get(it.id) + 1 } })));
 
-    try {
-      const material = await materialForClassification(item.url, { fetchImpl, fallbackText: item.tldr || '' });
-      const result = await gemini.classify(
-        {
-          url: item.url,
-          title: material.title || item.title,
-          author: material.author || (item.author_source !== item.source_feed ? item.author_source : ''),
-          text: material.text,
-          pdfBase64: material.pdfBase64,
-          existingCategories: categoryNames,
-        },
-        { deadline }
-      );
-
-      if (result.category && !categoryNames.includes(result.category)) categoryNames.push(result.category);
-
-      const fields = {
-        category: result.category || 'Uncategorised',
-        tags: result.tags,
-        format: result.format,
-        tldr: result.tldr,
-        type: material.type || item.type || 'Article',
-        last_error: '',
-      };
-      if (material.readingMinutes) fields.reading_time = material.readingMinutes;
-      if (result.author) fields.author_source = result.author;
-      // Prefer the real title for PDFs and for rows saved with only a URL-derived title.
-      const betterTitle = (material.title || result.title || '').trim();
-      if (betterTitle && (!item.title || item.type === 'PDF' || item.title === item.url)) fields.title = betterTitle;
-      if (material.thin) {
-        const basis = material.text ? 'the feed summary' : 'the title only';
-        fields.last_error = material.fetchError
-          ? `Page unavailable (${material.fetchError}); classified from ${basis}.`
-          : 'Classified from a short excerpt (page text unavailable).';
+  // Load every article's text at the same time.
+  const loaded = await Promise.all(
+    batch.map(async (item) => {
+      try {
+        return { item, material: await materialForClassification(item.url, { fetchImpl, fallbackText: item.tldr || '' }) };
+      } catch (err) {
+        return { item, error: err };
       }
+    })
+  );
 
-      await sheet.updateArticle([{ id: item.id, fields }]);
-      summary.processed++;
-    } catch (err) {
-      if (err instanceof RateLimitError) {
-        // Not this article's fault: undo the attempt and stop for now.
-        await sheet
-          .updateArticle([{ id: item.id, fields: { classify_attempts: attemptsBefore, last_error: ('Waiting to retry: ' + err.message).slice(0, 300) } }])
-          .catch(() => {});
-        summary.stopped = err.daily ? 'daily Gemini quota reached' : 'rate limited';
-        summary.detail = err.message;
-        log(`Stopping: ${err.message}`);
-        break;
-      }
+  const updates = [];
+  const ready = [];
+  for (const l of loaded) {
+    if (l.error) {
       summary.failed++;
-      log(`Failed to classify ${item.url}: ${err.message}`);
-      await sheet
-        .updateArticle([{ id: item.id, fields: { last_error: friendlyError(err).slice(0, 300) } }])
-        .catch(() => {});
+      log(`Could not load ${l.item.url}: ${l.error.message}`);
+      updates.push({ id: l.item.id, fields: { last_error: friendlyError(l.error).slice(0, 300) } });
+    } else {
+      ready.push(l);
     }
   }
+
+  const toInput = ({ item, material }) => ({
+    id: item.id,
+    url: item.url,
+    title: material.title || item.title,
+    author: material.author || (item.author_source !== item.source_feed ? item.author_source : ''),
+    text: material.text,
+    pdfBase64: material.pdfBase64,
+  });
+  const done = new Map(); // id -> { ok, result?, error? }
+  const textItems = ready.filter((r) => !r.material.pdfBase64);
+  const pdfItems = ready.filter((r) => r.material.pdfBase64);
+  let blocked = null;
+  let batchError = null;
+
+  try {
+    if (textItems.length) {
+      const res = await classifier.classifyBatch(textItems.map(toInput), { existingCategories: categoryNames, deadline });
+      res.forEach((r) => done.set(r.id, r));
+    }
+    // PDFs are sent as files, so each goes on its own.
+    for (const r of pdfItems) {
+      const [res] = await classifier.classifyBatch([toInput(r)], { existingCategories: categoryNames, deadline });
+      done.set(res.id, res);
+    }
+  } catch (err) {
+    if (err instanceof RateLimitError) blocked = err;
+    else batchError = err;
+  }
+
+  for (const r of ready) {
+    const out = done.get(r.item.id);
+    if (out?.ok) {
+      summary.processed++;
+      updates.push({ id: r.item.id, fields: fieldsFor(r.item, r.material, out.result) });
+    } else if (out) {
+      summary.failed++;
+      updates.push({ id: r.item.id, fields: { last_error: String(out.error || 'Not classified.').slice(0, 300) } });
+    } else if (blocked) {
+      // Not this article's fault: give the attempt back and try again later.
+      updates.push({
+        id: r.item.id,
+        fields: { classify_attempts: attemptsBefore.get(r.item.id), last_error: ('Waiting to retry: ' + blocked.message).slice(0, 300) },
+      });
+    } else {
+      summary.failed++;
+      log(`Batch failed: ${batchError?.message}`);
+      updates.push({ id: r.item.id, fields: { last_error: friendlyError(batchError).slice(0, 300) } });
+    }
+  }
+
+  if (blocked) {
+    summary.stopped = blocked.daily ? 'daily AI quota reached' : 'rate limited';
+    summary.detail = blocked.message;
+    log(`Stopping: ${blocked.message}`);
+  }
+
+  if (updates.length) await sheet.updateArticle(updates);
 
   summary.remaining = Math.max(0, pending.length - summary.processed - summary.failed);
-  return summary;
+  return finish();
 }
