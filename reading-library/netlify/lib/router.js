@@ -6,7 +6,7 @@ import { processPending } from './queue.js';
 import { assertPublicHttpUrl, json, sleep } from './util.js';
 
 const STATUSES = ['Unread', 'Reading', 'Finished', 'Archive'];
-const EDITABLE = ['status', 'notes', 'category', 'tags', 'title'];
+const EDITABLE = ['status', 'notes', 'category', 'tags', 'title', 'reading_time', 'last_error'];
 const MAX_ATTEMPTS = 5;
 
 async function readBody(req) {

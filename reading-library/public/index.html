@@ -2,16 +2,35 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Reading Library</title>
-<style>
-  body { font: 16px/1.6 system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; padding: 0 1rem; color: #222; }
-  @media (prefers-color-scheme: dark) { body { background: #151515; color: #ddd; } a { color: #8ab4ff; } }
-</style>
+<meta name="description" content="A quiet place to read.">
+<meta name="theme-color" content="#f7f4ee" id="theme-color">
+<meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Library">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<script>
+  // Apply the saved theme before first paint so dark mode never flashes white.
+  try {
+    var p = JSON.parse(localStorage.getItem('rl_prefs') || '{}');
+    var t = p.theme || 'auto';
+    var dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.getElementById('theme-color').content = dark ? '#151412' : '#f7f4ee';
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
-  <h1>Reading Library</h1>
-  <p>The backend is deployed. The reading app itself is the next build step.</p>
-  <p><a href="/setup.html">Open the setup check →</a></p>
+<div id="app" aria-live="polite"></div>
+<div id="layer"></div>
+<div id="toast" role="status"></div>
+<noscript><p style="padding:2rem">This app needs JavaScript.</p></noscript>
+<script type="module" src="/js/main.js"></script>
 </body>
 </html>
