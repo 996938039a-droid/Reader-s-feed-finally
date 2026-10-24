@@ -34,14 +34,13 @@ function retryDelayMs(res, bodyText) {
   return m ? Math.ceil(parseFloat(m[1]) * 1000) : 0;
 }
 
-/** Choose the newest general-purpose Flash model from a ListModels result. */
-export function pickFlashModel(models) {
+/** Usable general-purpose Flash models from a ListModels result, best first. */
+export function rankFlashModels(models) {
   const bad = /(image|tts|live|audio|native|robotics|computer|embedding|aqa|learnlm|gemma)/i;
   const usable = (models || [])
     .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map((m) => String(m.name || '').replace(/^models\//, ''))
     .filter((n) => /flash/i.test(n) && !bad.test(n));
-  if (!usable.length) return null;
   const score = (n) => {
     const v = n.match(/(\d+(?:\.\d+)?)/);
     return {
@@ -59,7 +58,21 @@ export function pickFlashModel(models) {
       y.stable - x.stable || y.version - x.version || y.full - x.full || y.alias - x.alias
     );
   });
-  return usable[0];
+  return usable;
+}
+
+/** The single best Flash model (or null). */
+export function pickFlashModel(models) {
+  return rankFlashModels(models)[0] || null;
+}
+
+/** Google's human-readable error message from a failed response body. */
+export function googleErrorMessage(text) {
+  try {
+    return JSON.parse(text).error?.message || String(text).slice(0, 300);
+  } catch {
+    return String(text).slice(0, 300);
+  }
 }
 
 export function buildPrompt({ url, title, author, text, existingCategories, hasPdf }) {
@@ -100,7 +113,7 @@ export function createGemini({
   requestTimeoutMs = 15000,
 }) {
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set.');
-  const state = { model, lastCallAt: 0, chain: Promise.resolve() };
+  const state = { model, lastCallAt: 0, chain: Promise.resolve(), tried: new Set([model]) };
 
   // Serialise every call and keep at least `delayMs` between starts (free-tier RPM cap).
   function paced(fn) {
@@ -144,6 +157,7 @@ export function createGemini({
    */
   async function generate(body, { deadline } = {}) {
     let switched = false;
+    let switches = 0;
     let attempt = 0;
     for (;;) {
       const res = await paced(() => rawCall(state.model, body));
@@ -161,12 +175,28 @@ export function createGemini({
       }
 
       if (res.status === 429 || res.status === 503) {
+        const detail = googleErrorMessage(text);
+
+        // "limit: 0" means this model has NO free-tier quota on your project at all.
+        // Waiting never helps, so move on to the next Flash model your key can use.
+        if (/limit:\s*0\b/i.test(detail) && switches < 3) {
+          switches++;
+          const next = rankFlashModels(await listModels()).find((m) => !state.tried.has(m));
+          if (next) {
+            log(`Gemini model "${state.model}" has no free quota (${detail.slice(0, 120)}); trying "${next}".`);
+            state.tried.add(next);
+            state.model = next;
+            continue;
+          }
+          throw new RateLimitError(`No free-tier quota on any available model. Google says: ${detail}`, { daily: true });
+        }
+
         const daily = /PerDay|per day|daily/i.test(text);
-        if (daily) throw new RateLimitError('Gemini daily free-tier quota reached.', { daily: true });
-        if (attempt >= 3) throw new RateLimitError('Gemini is rate limiting requests; will retry on the next run.');
+        if (daily) throw new RateLimitError(`Gemini daily free-tier quota reached. Google says: ${detail}`, { daily: true });
+        if (attempt >= 3) throw new RateLimitError(`Gemini keeps rate limiting (HTTP ${res.status}) on "${state.model}". Google says: ${detail}`);
         const wait = Math.max(retryDelayMs(res, text), 5000 * 2 ** attempt);
         if (deadline && now() + wait + 3000 > deadline) {
-          throw new RateLimitError('Rate limited and out of time in this run; will retry on the next run.');
+          throw new RateLimitError(`Gemini HTTP ${res.status} on "${state.model}" and no time left to retry. Google says: ${detail}`);
         }
         attempt++;
         log(`Gemini HTTP ${res.status}; retry ${attempt}/3 in ${Math.round(wait / 1000)}s.`);
@@ -232,5 +262,20 @@ export function createGemini({
     };
   }
 
-  return { classify, generate, listModels, state };
+  /** One tiny, unretried call that reports exactly what Google answers. For the setup page. */
+  async function ping() {
+    const res = await rawCall(state.model, {
+      contents: [{ role: 'user', parts: [{ text: 'Reply with the single word: ready' }] }],
+      generationConfig: { maxOutputTokens: 20 },
+    });
+    const text = await res.text().catch(() => '');
+    return {
+      ok: res.ok,
+      status: res.status,
+      model: state.model,
+      message: res.ok ? 'Gemini answered.' : googleErrorMessage(text),
+    };
+  }
+
+  return { classify, generate, listModels, ping, state };
 }

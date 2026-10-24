@@ -89,9 +89,10 @@ export async function processPending({
       if (err instanceof RateLimitError) {
         // Not this article's fault: undo the attempt and stop for now.
         await sheet
-          .updateArticle([{ id: item.id, fields: { classify_attempts: attemptsBefore, last_error: '' } }])
+          .updateArticle([{ id: item.id, fields: { classify_attempts: attemptsBefore, last_error: ('Waiting to retry: ' + err.message).slice(0, 300) } }])
           .catch(() => {});
         summary.stopped = err.daily ? 'daily Gemini quota reached' : 'rate limited';
+        summary.detail = err.message;
         log(`Stopping: ${err.message}`);
         break;
       }

@@ -59,6 +59,10 @@ export async function handle(req, deps) {
       return json(out);
     }
 
+    if (method === 'GET' && path === 'gemini-test') {
+      return json(await gemini.ping());
+    }
+
     if (method === 'GET' && path === 'models') {
       const models = await gemini.listModels();
       return json({
