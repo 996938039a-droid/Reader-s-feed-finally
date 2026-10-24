@@ -32,6 +32,13 @@
     <button id="stop" disabled>Stop</button>
   </div>
 
+  <h2>Sort again</h2>
+  <p><small>Puts articles back in the waiting list so they are sorted again with the improved prompt, then press "Classify all waiting". "Weak ones" re-sorts only articles with no real category or no tags. "Everything" re-sorts the whole library.</small></p>
+  <div>
+    <button id="redo-weak">Re-sort weak ones</button>
+    <button id="redo-all">Re-sort everything</button>
+  </div>
+
   <pre id="out">Enter your passphrase, then run step 1.</pre>
 <script>
   const pw = document.getElementById('pw');
@@ -116,6 +123,19 @@
     allBtn.disabled = false;
     stopBtn.disabled = true;
   }
+
+  async function requeue(mode) {
+    if (mode === 'all' && !confirm('Re-sort the whole library? It uses about one AI request per 5 articles.')) return;
+    try { localStorage.setItem('rl_pass', pw.value); } catch (e) {}
+    out.textContent = 'Working…';
+    try {
+      const r = await fetch('/api/reclassify', { method: 'POST', headers: { 'x-passphrase': pw.value, 'content-type': 'application/json' }, body: JSON.stringify({ mode }) });
+      const d = await r.json();
+      out.textContent = r.ok ? d.requeued + ' article(s) are back in the waiting list. Now press "Classify all waiting".' : 'HTTP ' + r.status + ' ' + (d.error || '');
+    } catch (e) { out.textContent = 'Request failed: ' + e.message; }
+  }
+  document.getElementById('redo-weak').onclick = () => requeue('weak');
+  document.getElementById('redo-all').onclick = () => requeue('all');
 
   document.getElementById('health').onclick = () => call('GET', 'health');
   document.getElementById('harvest').onclick = () => call('POST', 'harvest');
