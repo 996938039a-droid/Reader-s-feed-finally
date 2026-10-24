@@ -11,21 +11,34 @@
   input, button { font: inherit; padding: .5rem .75rem; margin: .25rem .25rem .25rem 0; }
   pre { white-space: pre-wrap; word-break: break-word; background: rgba(127,127,127,.15); padding: 1rem; border-radius: 8px; min-height: 4rem; }
   small { opacity: .7; }
+  h2 { font-size: 1.05rem; margin: 1.5rem 0 .25rem; }
 </style>
 </head>
 <body>
   <h1>Setup check</h1>
-  <p><small>Verifies that Netlify can reach your Sheet and Gemini. Nothing here changes your library except the two action buttons.</small></p>
+  <p><small>Verifies that Netlify can reach your Sheet and Gemini. Nothing here changes your library except the action buttons.</small></p>
   <label>Passphrase <input id="pw" type="password" autocomplete="current-password"></label>
   <div>
     <button id="health">1. Check connection</button>
-    <button id="harvest">2. Pull feeds now (seed)</button>
+    <button id="harvest">2. Pull feeds now</button>
     <button id="process">3. Classify one article</button>
+    <button id="gtest">Test Gemini</button>
   </div>
+
+  <h2>Catch up on everything waiting</h2>
+  <p><small>Classifies the waiting articles one after another, about one every 10 seconds. Keep this tab open; it stops by itself when everything is done. Anything it does not finish is picked up by the background schedule.</small></p>
+  <div>
+    <button id="all">Classify all waiting</button>
+    <button id="stop" disabled>Stop</button>
+  </div>
+
   <pre id="out">Enter your passphrase, then run step 1.</pre>
 <script>
   const pw = document.getElementById('pw');
   const out = document.getElementById('out');
+  const allBtn = document.getElementById('all');
+  const stopBtn = document.getElementById('stop');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   try { pw.value = localStorage.getItem('rl_pass') || ''; } catch (e) {}
 
   async function call(method, path) {
@@ -41,9 +54,76 @@
       out.textContent = 'Request failed: ' + e.message;
     }
   }
+
+  let running = false;
+  let stopRequested = false;
+
+  async function classifyAll() {
+    if (running) return;
+    try { localStorage.setItem('rl_pass', pw.value); } catch (e) {}
+    running = true;
+    stopRequested = false;
+    allBtn.disabled = true;
+    stopBtn.disabled = false;
+
+    const lines = [];
+    const log = (t) => { lines.push(t); out.textContent = lines.slice(-16).join('\n'); };
+    let done = 0, failed = 0, errors = 0, pauses = 0, idle = 0;
+    log('Classifying… keep this tab open. Press Stop to pause.');
+
+    while (!stopRequested) {
+      let res = null;
+      let data = null;
+      try {
+        res = await fetch('/api/process', { method: 'POST', headers: { 'x-passphrase': pw.value } });
+        data = await res.json();
+      } catch (e) {
+        data = null;
+      }
+      if (!data || !res || !res.ok) {
+        errors++;
+        const why = res ? 'HTTP ' + res.status + (data && data.error ? ' – ' + data.error : '') : 'network error';
+        log('Request problem (' + why + '). Retry ' + errors + ' of 4.');
+        if (errors >= 4) { log('Stopping after repeated errors. Try "Test Gemini" and check the last_error column in your Sheet.'); break; }
+        await sleep(8000);
+        continue;
+      }
+      errors = 0;
+      done += data.processed || 0;
+      failed += data.failed || 0;
+      const more = data.remaining >= 25 ? '25+' : String(data.remaining);
+      log('Classified ' + done + ', failed ' + failed + ', still waiting ' + more + (data.stopped ? ' (' + data.stopped + ')' : ''));
+
+      if (/daily/.test(data.stopped || '')) { log('Gemini\'s daily free quota is used up. The schedule will carry on tomorrow.'); break; }
+      if (data.stopped) {
+        pauses++;
+        if (pauses >= 6) { log('Gemini keeps pushing back' + (data.detail ? ': ' + data.detail : '') + '. Stopping for now.'); break; }
+        log('Pausing 30 seconds…');
+        await sleep(30000);
+        continue;
+      }
+      if (!data.processed && !data.failed) {
+        if (!data.remaining) { log('All caught up.'); break; }
+        idle++;
+        if (idle >= 3) { log('Nothing is moving. Stopping.'); break; }
+      } else {
+        idle = 0;
+      }
+      await sleep(500);
+    }
+    if (stopRequested) log('Stopped.');
+    running = false;
+    allBtn.disabled = false;
+    stopBtn.disabled = true;
+  }
+
   document.getElementById('health').onclick = () => call('GET', 'health');
   document.getElementById('harvest').onclick = () => call('POST', 'harvest');
   document.getElementById('process').onclick = () => call('POST', 'process');
+  document.getElementById('gtest').onclick = () => call('GET', 'gemini-test');
+
+  allBtn.onclick = classifyAll;
+  stopBtn.onclick = () => { stopRequested = true; };
 </script>
 </body>
 </html>
