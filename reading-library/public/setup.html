@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Setup check</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  input, button { font: inherit; padding: .5rem .75rem; margin: .25rem .25rem .25rem 0; }
+  pre { white-space: pre-wrap; word-break: break-word; background: rgba(127,127,127,.15); padding: 1rem; border-radius: 8px; min-height: 4rem; }
+  small { opacity: .7; }
+</style>
+</head>
+<body>
+  <h1>Setup check</h1>
+  <p><small>Verifies that Netlify can reach your Sheet and Gemini. Nothing here changes your library except the two action buttons.</small></p>
+  <label>Passphrase <input id="pw" type="password" autocomplete="current-password"></label>
+  <div>
+    <button id="health">1. Check connection</button>
+    <button id="harvest">2. Pull feeds now (seed)</button>
+    <button id="process">3. Classify one article</button>
+  </div>
+  <pre id="out">Enter your passphrase, then run step 1.</pre>
+<script>
+  const pw = document.getElementById('pw');
+  const out = document.getElementById('out');
+  try { pw.value = localStorage.getItem('rl_pass') || ''; } catch (e) {}
+
+  async function call(method, path) {
+    try { localStorage.setItem('rl_pass', pw.value); } catch (e) {}
+    out.textContent = 'Working…';
+    try {
+      const r = await fetch('/api/' + path, { method, headers: { 'x-passphrase': pw.value } });
+      const text = await r.text();
+      let shown = text;
+      try { shown = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+      out.textContent = 'HTTP ' + r.status + '\n' + shown;
+    } catch (e) {
+      out.textContent = 'Request failed: ' + e.message;
+    }
+  }
+  document.getElementById('health').onclick = () => call('GET', 'health');
+  document.getElementById('harvest').onclick = () => call('POST', 'harvest');
+  document.getElementById('process').onclick = () => call('POST', 'process');
+</script>
+</body>
+</html>
