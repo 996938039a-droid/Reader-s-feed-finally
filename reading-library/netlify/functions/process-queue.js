@@ -1,4 +1,4 @@
-// Scheduled: classifies a couple of pending articles every 10 minutes.
+// Scheduled: classifies a batch of pending articles every 10 minutes (one AI request per batch).
 // Scheduled functions only run on the PUBLISHED (production) deploy, never on previews.
 import { makeDeps } from '../lib/deps.js';
 import { processPending } from '../lib/queue.js';
@@ -8,8 +8,8 @@ export default async () => {
   try {
     const summary = await processPending({
       sheet: deps.sheet,
-      gemini: deps.gemini,
-      limit: 2,
+      classifier: deps.classifier,
+      limit: deps.cfg.batchSize,
       budgetMs: 24000, // Netlify scheduled functions are cut off at 30s
       log: deps.log,
     });
