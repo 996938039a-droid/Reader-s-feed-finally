@@ -28,7 +28,10 @@ export async function processPending({
   const summary = { processed: 0, failed: 0, remaining: null, stopped: '' };
 
   // Ask for a few extra rows so we can report roughly how many are still waiting.
-  const pending = await sheet.pending(Math.max(limit, 1) + 25);
+  const pending = (await sheet.pending(Math.max(limit, 1) + 25)).sort(
+    // Fresh articles first, so one stubborn article cannot hog every run.
+    (a, b) => (Number(a.classify_attempts) || 0) - (Number(b.classify_attempts) || 0)
+  );
   if (!pending.length) {
     summary.remaining = 0;
     return summary;
@@ -73,7 +76,12 @@ export async function processPending({
       // Prefer the real title for PDFs and for rows saved with only a URL-derived title.
       const betterTitle = (material.title || result.title || '').trim();
       if (betterTitle && (!item.title || item.type === 'PDF' || item.title === item.url)) fields.title = betterTitle;
-      if (material.thin) fields.last_error = 'Classified from a short excerpt (page text unavailable).';
+      if (material.thin) {
+        const basis = material.text ? 'the feed summary' : 'the title only';
+        fields.last_error = material.fetchError
+          ? `Page unavailable (${material.fetchError}); classified from ${basis}.`
+          : 'Classified from a short excerpt (page text unavailable).';
+      }
 
       await sheet.updateArticle([{ id: item.id, fields }]);
       summary.processed++;

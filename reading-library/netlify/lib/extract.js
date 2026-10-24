@@ -370,7 +370,20 @@ export async function materialForClassification(url, { fetchImpl = fetch, fallba
     const a = await fetchArxiv(id, { fetchImpl });
     return { type: 'arXiv', title: a.title, author: a.authors.join(', '), text: a.abstract };
   }
-  const page = await fetchPage(url, { fetchImpl, wantPdfBytes: true, timeoutMs: 8000 });
+  let page;
+  try {
+    page = await fetchPage(url, { fetchImpl, wantPdfBytes: true, timeoutMs: 8000 });
+  } catch (err) {
+    // A deleted page is a real failure. Anything else (timeout, bot-blocking, 5xx) should not
+    // leave the article stuck: classify from the feed summary, or failing that the title alone.
+    if (err?.status === 404 || err?.status === 410 || /valid URL|Private or local|http\(s\)/.test(err?.message || '')) throw err;
+    return {
+      type: looksLikePdfUrl(url) ? 'PDF' : 'Article',
+      text: fallbackText,
+      thin: true,
+      fetchError: friendlyError(err),
+    };
+  }
   if (page.kind === 'pdf') {
     return {
       type: 'PDF',

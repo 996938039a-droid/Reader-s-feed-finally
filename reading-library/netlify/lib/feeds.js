@@ -93,6 +93,12 @@ export async function harvest({ sheet, fetchImpl = fetch, cfg, feeds = FEEDS, lo
 
   const report = [];
   const known = new Set(existing.map((a) => normalizeUrl(a.url)));
+  const latestByFeed = new Map();
+  for (const a of existing) {
+    if (a.source_feed && a.published_date && String(a.published_date) > (latestByFeed.get(a.source_feed) || '')) {
+      latestByFeed.set(a.source_feed, String(a.published_date));
+    }
+  }
 
   const results = await Promise.all(
     feeds.map(async (feed) => {
@@ -126,9 +132,13 @@ export async function harvest({ sheet, fetchImpl = fetch, cfg, feeds = FEEDS, lo
       continue;
     }
     const fresh = [];
+    // After the first seed, only take posts NEWER than the newest one already saved from this
+    // feed. Otherwise every later run would keep pulling the feed's older backlog.
+    const latest = r.seeding ? '' : latestByFeed.get(r.feed.name) || '';
     for (const it of r.items) {
       const key = normalizeUrl(it.url);
       if (known.has(key)) continue;
+      if (latest && it.published && it.published <= latest) continue;
       if (fresh.length >= r.want) break;
       known.add(key);
       fresh.push(it);
@@ -141,6 +151,9 @@ export async function harvest({ sheet, fetchImpl = fetch, cfg, feeds = FEEDS, lo
         type: 'Article',
         source_feed: r.feed.name,
         published_date: it.published,
+        // The feed's own blurb, shown until Gemini writes a proper TL;DR. It is also the
+        // fallback text if the article page itself cannot be loaded.
+        tldr: it.summary ? it.summary.slice(0, 500) : '',
         status: 'Unread',
       });
     }

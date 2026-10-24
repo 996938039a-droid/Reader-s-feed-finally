@@ -80,6 +80,9 @@ export function buildPrompt({ url, title, author, text, existingCategories, hasP
     `URL: ${url || '(unknown)'}`,
     title ? `Known title: ${title}` : '',
     author ? `Known author: ${author}` : '',
+    !hasPdf && !text
+      ? 'Only the title is available (the page could not be loaded). Keep the tldr to one cautious sentence based on the title and do not invent specifics.'
+      : '',
     hasPdf ? 'The document is attached as a PDF.' : '--- TEXT BEGINS ---\n' + (text || '(no text available)'),
   ]
     .filter((l) => l !== '')
