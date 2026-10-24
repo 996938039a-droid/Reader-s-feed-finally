@@ -28,6 +28,9 @@ function categoriesFrom(articles) {
  * @param {Request} req
  * @param {object} deps { cfg, sheet, gemini, log, fetchImpl? }
  */
+import { GENERIC_CATEGORY } from './classify-common.js';
+import { readingTimeIsLow } from './util.js';
+
 export async function handle(req, deps) {
   const { cfg, sheet, gemini, log } = deps;
   const url = new URL(req.url);
@@ -74,7 +77,7 @@ export async function handle(req, deps) {
     }
 
     if (method === 'GET' && path === 'library') {
-      const articles = await sheet.articles();
+      const articles = (await sheet.articles()).map((a) => ({ ...a, reading_time_low: readingTimeIsLow(a) }));
       const pending = articles.filter((a) => !a.category && (a.classify_attempts || 0) < MAX_ATTEMPTS).length;
       return json({ articles, categories: categoriesFrom(articles), pending });
     }
@@ -96,6 +99,19 @@ export async function handle(req, deps) {
       if (fields.status && !STATUSES.includes(fields.status)) return json({ error: 'Invalid status' }, 400);
       const res = await sheet.updateArticle([{ id: body.id, fields }]);
       return json({ ok: true, ...res });
+    }
+
+    if (method === 'POST' && path === 'reclassify') {
+      // Put articles back in the queue so the (improved) AI sorts them again.
+      const body = await readBody(req);
+      const mode = body.mode === 'all' ? 'all' : 'weak';
+      const articles = await sheet.articles();
+      const weak = (a) => !a.category || GENERIC_CATEGORY.test(a.category) || !(a.tags || []).length;
+      const chosen = articles.filter((a) => a.category && (mode === 'all' || weak(a)));
+      for (let i = 0; i < chosen.length; i += 40) {
+        await sheet.updateArticle(chosen.slice(i, i + 40).map((a) => ({ id: a.id, fields: { category: '', classify_attempts: 0 } })));
+      }
+      return json({ ok: true, requeued: chosen.length, mode });
     }
 
     if (method === 'POST' && path === 'categories/merge') {

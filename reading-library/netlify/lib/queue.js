@@ -1,6 +1,9 @@
 import { RateLimitError } from './gemini.js';
 import { friendlyError, materialForClassification } from './extract.js';
 
+/** Marker text in last_error that tells the app to show the reading time as low confidence. */
+export const READING_TIME_NOTE = 'Reading time may be off (the page text looked short).';
+
 function fieldsFor(item, material, result) {
   const fields = {
     category: result.category || 'Uncategorised',
@@ -16,6 +19,7 @@ function fieldsFor(item, material, result) {
   // Prefer the real title for PDFs and for rows saved with only a URL-derived title.
   const betterTitle = (material.title || result.title || '').trim();
   if (betterTitle && (!item.title || item.type === 'PDF' || item.title === item.url)) fields.title = betterTitle;
+  if (material.shortText && !material.thin) fields.last_error = READING_TIME_NOTE;
   if (material.thin) {
     const basis = material.text ? 'the feed summary' : 'the title only';
     fields.last_error = material.fetchError

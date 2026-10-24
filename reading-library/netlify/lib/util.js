@@ -110,3 +110,8 @@ export function json(body, status = 200) {
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 }
+
+/** True when the saved reading time is a rough guess (thin page, short extract, unavailable page). */
+export function readingTimeIsLow(article) {
+  return /classified from|reading time may be off|page unavailable/i.test(String(article?.last_error || ''));
+}

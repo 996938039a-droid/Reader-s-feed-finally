@@ -399,6 +399,7 @@ export async function materialForClassification(url, { fetchImpl = fetch, fallba
     author: parsed.byline,
     text,
     readingMinutes: parsed.readingMinutes,
+    shortText: parsed.wordCount < 500, // may be a preview or a paywalled stub
     thin: parsed.textContent.length <= 300,
   };
 }

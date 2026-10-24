@@ -10,13 +10,15 @@ const ITEM_SCHEMA = {
   properties: {
     id: { type: 'STRING' },
     title: { type: 'STRING' },
+    topic: { type: 'STRING' },
     category: { type: 'STRING' },
     tags: { type: 'ARRAY', items: { type: 'STRING' } },
     format: { type: 'STRING', enum: FORMATS },
     tldr: { type: 'STRING' },
     author: { type: 'STRING' },
   },
-  required: ['id', 'category', 'tags', 'format', 'tldr', 'author'],
+  propertyOrdering: ['id', 'title', 'topic', 'category', 'tags', 'format', 'tldr', 'author'],
+  required: ['id', 'topic', 'category', 'tags', 'format', 'tldr', 'author'],
 };
 const BATCH_SCHEMA = {
   type: 'OBJECT',
