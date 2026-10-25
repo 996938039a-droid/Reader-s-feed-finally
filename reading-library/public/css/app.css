@@ -300,3 +300,26 @@ mark.hl.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @media print { .topbar, .r-bar, .seltool { display: none !important; } }
+
+/* ---------- sources page ---------- */
+.page.narrow { max-width: 46rem; }
+.page-title { font: 600 1.9rem/1.2 var(--serif); margin: .4rem 0 .3rem; }
+.sec { font: 600 1.25rem/1.3 var(--serif); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 1rem; display: grid; gap: .6rem; margin-top: 1.2rem; }
+.panel .lbl { font-size: .85rem; color: var(--muted); font-weight: 600; }
+.src { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: space-between; align-items: center; padding: .85rem 1rem; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); margin-bottom: .6rem; }
+.src-main { min-width: 0; flex: 1 1 14rem; }
+.src-meta { display: flex; flex-wrap: wrap; gap: .1rem .8rem; color: var(--muted); font-size: .85rem; }
+.src-ctl { display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: center; font-size: .92rem; }
+.sugg { display: grid; gap: .8rem; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+
+/* ---------- word meanings ---------- */
+.defpop { position: fixed; z-index: 110; width: min(23rem, calc(100vw - 1rem)); max-height: min(70dvh, 28rem); overflow-y: auto; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 16px; padding: 1rem 1.1rem; display: grid; gap: .6rem; animation: pop .12s; }
+.defpop .w { font: 700 1.35rem/1.2 var(--serif); }
+.defpop .ph { color: var(--muted); font-size: .95rem; margin-left: .4rem; }
+.defpop .pos { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 600; margin-top: .3rem; }
+.defpop ol { margin: .2rem 0 0; padding-left: 1.2rem; display: grid; gap: .4rem; }
+.defpop li { font-size: .98rem; line-height: 1.45; }
+.defpop li em { display: block; color: var(--muted); font-size: .9rem; }
+.defpop .src-line { font-size: .8rem; color: var(--muted); }
+@media (max-width: 720px) { .defpop { left: .5rem !important; right: .5rem; top: auto !important; bottom: calc(.5rem + var(--sab)); width: auto; } }

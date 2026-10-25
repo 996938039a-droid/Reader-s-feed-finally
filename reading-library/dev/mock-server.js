@@ -29,6 +29,15 @@ let articles = [
   A(12, 'Traction!', 'Jennifer R Vail', 'Aeon', '', '', null, 'Tribologists study friction: what happens when things rub together.'),
 ];
 let highlights = [];
+let sources = [
+  { id: 's1', name: 'Aeon', feed_url: 'https://aeon.co/feed.rss', site_url: 'https://aeon.co', active: true, long_only: false, min_minutes: 0, last_fetched: day(0.1), last_status: 'OK', last_found: 20, total_added: 8 },
+  { id: 's2', name: 'Noema', feed_url: 'https://www.noemamag.com/feed/', site_url: 'https://www.noemamag.com', active: true, long_only: true, min_minutes: 6, last_fetched: day(0.3), last_status: 'Failed: HTTP 503', last_found: null, total_added: 6 },
+];
+const SUGG = [
+  { name: 'Quanta Magazine', site: 'https://www.quantamagazine.org', about: 'Mathematics, physics, biology and computer science, explained in depth.' },
+  { name: 'The Marginalian', site: 'https://www.themarginalian.org', about: 'Maria Popova on art, science, philosophy and the examined life.' },
+  { name: 'Longreads', site: 'https://longreads.com', about: 'A daily pick of the best long stories around the web.' },
+];
 
 const para = (s) => `<p>${s}</p>`;
 const LONG = Array.from({ length: 26 }, (_, i) => para(
@@ -66,6 +75,23 @@ http.createServer(async (req, res) => {
       await new Promise((r) => setTimeout(r, 250));
       return send(res, 200, { ok: true, kind: 'article', title: a?.title, byline: a?.author_source, siteName: a?.source_feed, contentHtml: CONTENT, wordCount: 4200, readingMinutes: 17, originalUrl: u.searchParams.get('url') });
     }
+    if (p === 'define') {
+      const w = (u.searchParams.get('word') || '').toLowerCase();
+      if (w === 'nonsenseword') return send(res, 200, { ok: false, notFound: true });
+      return send(res, 200, { ok: true, word: w, phonetic: '/ˈsɛrənˌdɪpɪti/', audio: '', meanings: [{ pos: 'noun', definitions: [{ text: 'The occurrence of events by chance in a happy or beneficial way.', example: 'A fortunate stroke of serendipity.' }, { text: 'An aptitude for making desirable discoveries by accident.', example: '' }] }, { pos: 'adjective', definitions: [{ text: 'Happening by chance, in a pleasant way.', example: '' }] }], source: 'Free Dictionary', url: 'https://en.wiktionary.org/wiki/' + w });
+    }
+    if (p === 'sources' && req.method === 'GET') return send(res, 200, { sources: sources.map((x) => ({ ...x, article_count: articles.filter((a) => a.source_feed === x.name).length })), suggestions: SUGG });
+    if (p === 'sources' && req.method === 'POST') {
+      if (/bad/.test(body.url)) return send(res, 422, { ok: false, error: 'No feed was found on that site. Try pasting the feed address itself (often ending in /feed or /rss).' });
+      const name = body.name || 'New Source ' + (sources.length + 1);
+      const id = 's' + (sources.length + 1);
+      sources.push({ id, name, feed_url: body.url + '/feed', site_url: body.url, active: true, long_only: body.long_only !== false, min_minutes: body.min_minutes || 6, last_fetched: '', last_status: '', last_found: null, total_added: 0 });
+      return send(res, 200, { ok: true, id, name, feedUrl: body.url + '/feed', sample: [], longCount: 3, total: 10 });
+    }
+    if (p === 'sources/pull') { const x = sources.find((q) => q.id === body.id); if (x) { x.last_fetched = day(0); x.last_status = 'OK'; x.total_added = 7; } return send(res, 200, { ok: true, report: [{ feed: x?.name, added: 7, found: 12 }] }); }
+    if (p === 'sources/update') { const x = sources.find((q) => q.id === body.id); if (x) Object.assign(x, body.fields); return send(res, 200, { ok: true }); }
+    if (p === 'sources/delete') { sources = sources.filter((q) => q.id !== body.id); return send(res, 200, { ok: true, deleted: true }); }
+    if (p === 'harvest') return send(res, 200, { ok: true, report: [{ feed: 'Aeon', added: 2 }] });
     return send(res, 404, { error: 'Not found' });
   }
   let f = path.join(root, u.pathname === '/' ? 'index.html' : u.pathname);

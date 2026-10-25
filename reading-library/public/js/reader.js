@@ -1,11 +1,13 @@
 // The reading screen: full viewport, no distractions, highlights and notes.
 import { COLORS, debounce, esc, getPrefs, highlightsMarkdown, icon, setPrefs, shortDate, toast, uid } from './util.js';
 import {
-  articleById, deleteHighlight, fetchContent, getContent, getProgress, hasOffline, highlightsFor, onChange,
-  removeContent, saveHighlight, setProgress, syncHighlights, updateArticle,
+  articleById, deleteHighlight, fetchContent, getContent, touchContent, getProgress, hasOffline, highlightsFor, onChange,
+  saveHighlight, setProgress, syncHighlights, updateArticle,
 } from './sync.js';
 import { describe, paint, rangeOffsets } from './highlight.js';
-import { openDrawer, popover } from './ui.js';
+import { openDrawer, openMenu, place, popover } from './ui.js';
+import { api } from './api.js';
+import { getMeta, setMeta, store } from './store.js';
 
 const WIDTHS = { narrow: '33rem', medium: '40rem', wide: '50rem' };
 const SPACING = { snug: 1.55, normal: 1.7, roomy: 1.95 };
@@ -114,14 +116,16 @@ export async function renderReader(app, id, ctx, { hl: focusHid } = {}) {
   $('#r-more').onclick = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const items = [];
-    items.push(offline
-      ? { label: 'Remove offline copy', run: async () => { await removeContent(id); offline = false; toast('Offline copy removed'); } }
-      : { label: 'Save for offline', run: async () => { if (content && content.ok !== false) { const { store } = await import('./store.js'); await store.put('content', { ...content, id, savedAt: Date.now() }); offline = true; toast('Saved for offline reading'); } else toast('Nothing to save yet'); } });
+    if (!offline) {
+      items.push({ label: 'Save for offline', run: async () => {
+        if (content && content.ok !== false) { await store.put('content', { ...content, id, savedAt: Date.now(), openedAt: Date.now() }); offline = true; toast('Saved for offline reading'); } else toast('Nothing to save yet');
+      } });
+    }
     items.push({ label: 'Reload article text', run: () => load(true) });
     items.push({ label: 'Copy highlights as Markdown', run: copyMarkdown });
     items.push({ label: 'Open original page', run: () => window.open(article.url, '_blank', 'noopener') });
     items.push({ label: 'Archive', run: async () => { await updateArticle(id, { status: 'Archive' }); toast('Archived'); goBack(); } });
-    import('./ui.js').then(({ openMenu }) => openMenu(rect, items));
+    openMenu(rect, items);
   };
 
   /* ---------- scrolling: progress, auto-hiding bar, position memory ---------- */
@@ -174,26 +178,35 @@ export async function renderReader(app, id, ctx, { hl: focusHid } = {}) {
   tool.className = 'seltool';
   tool.hidden = true;
   tool.innerHTML = COLORS.map((c) => `<button data-c="${c}" aria-label="Highlight: ${c}"><span class="dotc ${c}"></span></button>`).join('') +
-    `<span class="sep"></span><button data-note aria-label="Highlight and add a note">${icon('note')}</button>`;
+    `<span class="sep"></span><button data-note aria-label="Highlight and add a note">${icon('note')}</button>` +
+    `<button data-define aria-label="Meaning of the selected word" title="Meaning">${icon('book')}</button>`;
   reader.appendChild(tool);
+  let pendingRect = null;
+  let defining = false;
   const hideTool = () => { tool.hidden = true; pending = null; };
+  const defineTarget = (t) => { const w = t.replace(/\s+/g, ' ').trim(); return w.length > 0 && w.length <= 60 && w.split(' ').length <= 4 && /\p{L}/u.test(w) ? w : ''; };
   const onSel = debounce(() => {
+    if (defining) return;
     const sel = getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) { if (!tool.matches(':hover, :focus-within')) hideTool(); return; }
     const r = sel.getRangeAt(0);
     if (!body.contains(r.commonAncestorContainer) || !r.toString().trim()) { hideTool(); return; }
     pending = rangeOffsets(body, r);
+    pendingRect = r.getBoundingClientRect();
+    pending.text = r.toString();
+    tool.querySelector('[data-define]').hidden = !defineTarget(pending.text);
     const labelsNow = labels();
     tool.querySelectorAll('[data-c]').forEach((b) => { b.title = labelsNow[b.dataset.c]; });
     tool.hidden = false;
     const rect = r.getBoundingClientRect();
-    import('./ui.js').then(({ place }) => place(tool, rect, { prefer: 'above' }));
+    place(tool, rect, { prefer: 'above' });
   }, 140);
   on(document, 'selectionchange', onSel);
   on(tool, 'mousedown', (e) => e.preventDefault());
   on(tool, 'pointerdown', (e) => e.preventDefault());
   on(tool, 'click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
+    if (b.hasAttribute('data-define')) { openDefine(defineTarget(pending?.text || ''), pendingRect); return; }
     addHighlight(b.dataset.c || 'yellow', b.hasAttribute('data-note'));
   });
 
@@ -214,6 +227,40 @@ export async function renderReader(app, id, ctx, { hl: focusHid } = {}) {
     }
   }
 
+  /* ---------- word meanings ---------- */
+  async function lookup(term) {
+    const key = 'def:' + term.toLowerCase();
+    const cached = await getMeta(key, null);
+    if (cached) return cached;
+    const r = await api.define(term);
+    if (r.ok) setMeta(key, r); // looked-up words keep working offline
+    return r;
+  }
+  function renderDefinition(r, term) {
+    if (!r.ok) {
+      const q = encodeURIComponent('define ' + term);
+      return `<div class="w">${esc(term)}</div><p class="hint">${r.notFound ? 'No dictionary entry found. Names and phrases often are not listed.' : esc(r.error || 'Could not look that up.')}</p><a class="btn" href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener noreferrer">${icon('ext')} Search the web</a>`;
+    }
+    return `<div><span class="w">${esc(r.word)}</span>${r.phonetic ? `<span class="ph">${esc(r.phonetic)}</span>` : ''}${r.audio ? ` <button class="icon-btn" data-audio aria-label="Hear it" style="width:34px;height:34px;vertical-align:middle">${icon('volume')}</button>` : ''}</div>` +
+      (r.looked ? `<div class="src-line">Showing “${esc(r.looked)}”</div>` : '') +
+      r.meanings.map((m) => `<div><div class="pos">${esc(m.pos)}</div><ol>${m.definitions.map((d) => `<li>${esc(d.text)}${d.example ? `<em>“${esc(d.example)}”</em>` : ''}</li>`).join('')}</ol></div>`).join('') +
+      `<div class="src-line">${esc(r.source)} · <a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">more</a></div>`;
+  }
+  async function openDefine(term, rect) {
+    if (!term || !rect) return;
+    defining = true;
+    tool.hidden = true;
+    const pop = popover('defpop', `<div class="w">${esc(term)}</div><p class="hint">Looking it up…</p>`, rect, {
+      prefer: 'below', dim: true,
+      onClose: () => { defining = false; getSelection()?.removeAllRanges(); pending = null; },
+    });
+    let r;
+    try { r = await lookup(term); } catch (err) { r = { ok: false, error: err.status === 0 ? 'You are offline, and this word has not been looked up before.' : err.message }; }
+    pop.el.innerHTML = renderDefinition(r, term);
+    const au = pop.el.querySelector('[data-audio]');
+    if (au) au.onclick = () => { try { new Audio(r.audio.startsWith('//') ? 'https:' + r.audio : r.audio).play(); } catch { /* ignore */ } };
+  }
+
   on(body, 'click', (e) => {
     const m = e.target.closest('mark.hl');
     if (!m || !getSelection()?.isCollapsed) return;
@@ -225,7 +272,17 @@ export async function renderReader(app, id, ctx, { hl: focusHid } = {}) {
     if (!h0) return;
     const L = labels();
     let h = h0;
-    const save = debounce(async (patch) => { h = await saveHighlight({ ...h, ...patch }); hls = hls.map((x) => (x.id === h.id ? h : x)); repaintKeepPopover(); }, 500);
+    let patch = null;      // edits not yet sent
+    let removed = false;
+    const commit = async () => {
+      if (!patch || removed) { patch = null; return; }
+      const p = patch;
+      patch = null;
+      h = await saveHighlight({ ...h, ...p });
+      hls = hls.map((x) => (x.id === h.id ? h : x));
+      repaint();
+    };
+    const save = debounce(commit, 500);
     const pop = popover('hlpop', `
       <p class="quote">“${esc(h.quote.length > 220 ? h.quote.slice(0, 220) + '…' : h.quote)}”</p>
       <div class="colors">
@@ -234,20 +291,21 @@ export async function renderReader(app, id, ctx, { hl: focusHid } = {}) {
         <button class="icon-btn" data-del aria-label="Delete highlight" title="Delete highlight">${icon('trash')}</button>
       </div>
       <textarea placeholder="Add a note…" aria-label="Note">${esc(h.note || '')}</textarea>`,
-    rect, { prefer: 'below', dim: true, onClose: () => save.flush({}) });
+    rect, { prefer: 'below', dim: true, onClose: () => { save.cancel(); commit(); } });
     const ta = pop.el.querySelector('textarea');
-    ta.addEventListener('input', () => save({ note: ta.value }));
+    ta.addEventListener('input', () => { patch = { ...patch, note: ta.value }; save(); });
     pop.el.querySelector('.colors').addEventListener('click', async (e) => {
       const c = e.target.closest('[data-c]');
       if (c) {
         save.cancel();
-        h = await saveHighlight({ ...h, color: c.dataset.c, note: ta.value });
-        hls = hls.map((x) => (x.id === h.id ? h : x));
+        patch = { ...patch, color: c.dataset.c, note: ta.value };
         pop.el.querySelectorAll('[data-c]').forEach((b) => b.setAttribute('aria-pressed', String(b === c)));
-        repaint();
+        await commit();
       }
       if (e.target.closest('[data-del]')) {
         save.cancel();
+        patch = null;
+        removed = true; // closing the popup must not save the old copy again
         await deleteHighlight(h);
         hls = hls.filter((x) => x.id !== h.id);
         pop.close();
@@ -257,7 +315,6 @@ export async function renderReader(app, id, ctx, { hl: focusHid } = {}) {
     });
     if (focusNote) setTimeout(() => ta.focus(), 50);
   }
-  const repaintKeepPopover = () => repaint();
 
   function scrollToHighlight(hid) {
     const m = body.querySelector(`mark[data-hid="${hid}"]`);
@@ -322,6 +379,7 @@ export async function renderReader(app, id, ctx, { hl: focusHid } = {}) {
     $('#notice').innerHTML = '';
     try {
       content = force ? await fetchContent(article, { force: true }) : (await getContent(id)) || (await fetchContent(article));
+      touchContent(id);
     } catch (err) {
       content = { ok: false, error: err.message || 'Could not load this article.' };
     }

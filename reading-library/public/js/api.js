@@ -33,4 +33,11 @@ export const api = {
   highlights: (since) => call('GET', 'highlights', null, { since }),
   pushHighlights: (items) => call('POST', 'highlights', { items }),
   extract: (url) => call('GET', 'extract', null, { url }),
+  define: (word) => call('GET', 'define', null, { word }),
+  sources: () => call('GET', 'sources'),
+  addSource: (url, opts = {}) => call('POST', 'sources', { url, ...opts }),
+  pullSource: (id) => call('POST', 'sources/pull', { id }),
+  updateSource: (id, fields) => call('POST', 'sources/update', { id, fields }),
+  deleteSource: (id) => call('POST', 'sources/delete', { id }),
+  harvest: () => call('POST', 'harvest'),
 };

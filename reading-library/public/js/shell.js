@@ -8,6 +8,7 @@ export function topbar(active, { search = false } = {}) {
     <nav class="nav" aria-label="Main">
       <a class="link" href="#/" ${active === 'library' ? 'aria-current="page"' : ''}>Library</a>
       <a class="link" href="#/highlights" ${active === 'highlights' ? 'aria-current="page"' : ''}>Highlights</a>
+      <a class="link" href="#/sources" ${active === 'sources' ? 'aria-current="page"' : ''}>Sources</a>
     </nav>
     ${search ? `<label class="search"><span class="sr">Search</span>${icon('search')}<input id="q" type="search" placeholder="Search titles, authors, tags…" autocomplete="off"></label>` : '<span class="spacer"></span>'}
     <button class="icon-btn" id="add-toggle" aria-label="Add a link" title="Add a link">${icon('plus')}</button>

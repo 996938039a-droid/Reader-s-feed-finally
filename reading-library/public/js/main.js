@@ -1,9 +1,10 @@
 import { api, ApiError, getPass, setPass } from './api.js';
 import { applyTheme, esc, firstUrl, getPrefs, toast } from './util.js';
-import { articleById, loadLibrary, state, syncAll } from './sync.js';
+import { articleById, loadLibrary, purgeExpiredContent, state, syncAll } from './sync.js';
 import { renderLibrary } from './library.js';
 import { renderReader, requestFullscreen } from './reader.js';
 import { renderHighlights } from './highlights-page.js';
+import { renderSources } from './sources-page.js';
 import { closeAll } from './ui.js';
 
 const app = document.getElementById('app');
@@ -74,6 +75,8 @@ async function route() {
       if (!articleById(id)) await loadLibrary({ refresh: false }).catch(() => {});
       if (!articleById(id)) await loadLibrary().catch(() => {});
       fn = await renderReader(app, id, ctx, { hl: params.get('h') });
+    } else if (path === '/sources') {
+      fn = await renderSources(app, ctx);
     } else if (path === '/highlights') {
       fn = await renderHighlights(app, ctx);
     } else {
@@ -91,7 +94,7 @@ async function route() {
 
 applyTheme();
 addEventListener('hashchange', route);
-route().then(() => { if (getPass()) { handleIncoming(); syncAll(); } });
+route().then(() => { if (getPass()) { handleIncoming(); syncAll(); purgeExpiredContent(); } });
 
 if ('serviceWorker' in navigator) {
   addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));

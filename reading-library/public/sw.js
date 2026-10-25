@@ -1,10 +1,10 @@
 // Makes the app open instantly and work offline. Article text and highlights are kept by the app
 // itself (IndexedDB); this file only keeps the app's own files and article images.
-const VERSION = 'rl-v1';
+const VERSION = 'rl-v2';
 const SHELL = [
   '/', '/index.html', '/manifest.webmanifest', '/css/app.css',
   '/js/main.js', '/js/api.js', '/js/store.js', '/js/sync.js', '/js/util.js', '/js/ui.js', '/js/shell.js',
-  '/js/library.js', '/js/reader.js', '/js/highlight.js', '/js/highlights-page.js', '/js/settings.js',
+  '/js/library.js', '/js/reader.js', '/js/highlight.js', '/js/highlights-page.js', '/js/sources-page.js', '/js/settings.js',
   '/icons/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
 ];
 const IMAGES = 'rl-images';

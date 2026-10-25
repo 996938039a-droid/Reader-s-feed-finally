@@ -1,6 +1,6 @@
 import { api } from './api.js';
 import { LOW_TIME_HINT, debounce, esc, hostOf, icon, readingLabel, shortDate, toast } from './util.js';
-import { articleById, hasOffline, loadLibrary, onChange, state, updateArticle, fetchContent, removeContent, getProgress } from './sync.js';
+import { articleById, hasOffline, loadLibrary, onChange, state, updateArticle, fetchContent, getProgress } from './sync.js';
 import { openMenu, openSheet } from './ui.js';
 import { topbar, wireTopbar } from './shell.js';
 import { openSettings } from './settings.js';
@@ -42,7 +42,7 @@ function cardHtml(a, offline, progress) {
       ${reading ? `<span class="pill reading">${progress ? Math.round(progress) + '% read' : 'Reading'}</span>` : ''}
       ${a.status === 'Finished' ? '<span class="pill">Finished</span>' : ''}
       ${tags ? `<span class="tags">${esc(tags)}</span>` : ''}
-      ${offline ? '<span class="dot-off" title="Saved on this device">Offline</span>' : ''}
+      ${offline ? '<span class="dot-off" title="Saved on this device. Kept for 30 days after you last open it.">Offline</span>' : ''}
       <span style="margin-left:auto">${esc(shortDate(when(a)))}</span>
     </div>
   </article>`;
@@ -184,9 +184,9 @@ export async function renderLibrary(app, ctx) {
     if (a.status !== 'Finished') items.push({ label: 'Mark as finished', run: setStatus('Finished') });
     items.push(a.status === 'Archive' ? { label: 'Move out of archive', run: setStatus('Unread') } : { label: 'Archive', run: setStatus('Archive') });
     items.push('-', { label: 'Move to category…', run: () => categoryDialog(a) });
-    items.push(offlineSet.has(a.id)
-      ? { label: 'Remove offline copy', run: async () => { await removeContent(a.id); offlineSet.delete(a.id); render(); toast('Offline copy removed'); } }
-      : { label: 'Save for offline', run: async () => { toast('Saving…'); try { const c = await fetchContent(a); if (c.ok === false) throw new Error(c.error); offlineSet.add(a.id); render(); toast('Saved for offline reading'); } catch (err) { toast(err.message || 'Could not save this one'); } } });
+    if (!offlineSet.has(a.id)) {
+      items.push({ label: 'Save for offline', run: async () => { toast('Saving…'); try { const c = await fetchContent(a); if (c.ok === false) throw new Error(c.error); offlineSet.add(a.id); render(); toast('Saved for offline reading'); } catch (err) { toast(err.message || 'Could not save this one'); } } });
+    }
     items.push({ label: 'Open original page', run: () => window.open(a.url, '_blank', 'noopener') });
     openMenu(btn, items);
   }

@@ -52,6 +52,10 @@ export function createSheet({ url, token, fetchImpl = fetch, timeoutMs = 25000 }
     updateStatus: (id, status) => post('update_status', { id, status }),
     upsertHighlights: (items) => post('upsert_highlights', items),
     mergeCategory: (from, to) => post('merge_category', { from, to }),
+    sources: () => get('sources'),
+    addSource: (items) => post('add_source', items),
+    updateSource: (items) => post('update_source', items),
+    deleteSource: (id) => post('delete_source', { id }),
     ping: () => post('ping', {}),
   };
 }

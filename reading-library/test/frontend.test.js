@@ -48,3 +48,23 @@ test('reader fills the screen and hides its bar (CSS contract)', () => {
   assert.match(css, /:root\[data-theme="dark"\]/);
   assert.match(css, /env\(safe-area-inset-top/);
 });
+
+test('deleting a highlight cannot be undone by closing the popup (regression)', () => {
+  const r = read('js/reader.js');
+  // the popup's close handler may only save pending edits, and never after a delete
+  assert.match(r, /removed = true/);
+  assert.match(r, /if \(!patch \|\| removed\)/);
+  assert.doesNotMatch(r, /save\.flush\(\{\}\)/);
+});
+
+test('offline copies: expire 30 days after last opened; no way to remove them by hand', () => {
+  const sync = read('js/sync.js');
+  assert.match(sync, /OFFLINE_DAYS = 30/);
+  assert.match(sync, /openedAt \|\| c\.savedAt/);
+  for (const f of ['library.js', 'reader.js', 'settings.js']) {
+    const t = read('js/' + f);
+    assert.doesNotMatch(t, /Remove offline copy|Clear offline copies/, f);
+  }
+  assert.match(read('js/library.js'), /Save for offline/, 'saving ahead of time stays');
+  assert.match(read('js/main.js'), /purgeExpiredContent\(\)/);
+});

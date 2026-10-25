@@ -1,7 +1,6 @@
 import { COLORS, DEFAULT_LABELS, applyTheme, esc, getPrefs, setPrefs, toast, icon } from './util.js';
 import { setPass } from './api.js';
 import { openSheet } from './ui.js';
-import { store } from './store.js';
 
 export function openSettings({ onSignOut } = {}) {
   const p = getPrefs();
@@ -33,7 +32,6 @@ export function openSettings({ onSignOut } = {}) {
       <div class="field"><span class="lbl">This device</span>
         <div class="row">
           <a class="btn" href="/setup.html">Setup &amp; classify tools</a>
-          <button class="btn" id="s-clear">Clear offline copies</button>
           <button class="btn danger" id="s-out">Sign out</button>
         </div>
       </div>`,
@@ -51,7 +49,6 @@ export function openSettings({ onSignOut } = {}) {
   b.querySelector('#s-copy').onclick = async () => {
     try { await navigator.clipboard.writeText(bookmarklet); toast('Bookmarklet copied'); } catch { toast('Could not copy. Drag the button instead.'); }
   };
-  b.querySelector('#s-clear').onclick = async () => { await store.clear('content'); toast('Offline copies removed'); };
   b.querySelector('#s-out').onclick = () => { setPass(''); sheet.close(); onSignOut?.(); };
   applyTheme(p.theme);
 }

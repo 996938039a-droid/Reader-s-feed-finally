@@ -135,11 +135,27 @@ export async function fetchContent(article, { force = false } = {}) {
     if (have) return have;
   }
   const data = await api.extract(article.url);
-  const rec = { ...data, id: article.id, savedAt: Date.now() };
+  const rec = { ...data, id: article.id, savedAt: Date.now(), openedAt: Date.now() };
   if (data.ok !== false) await store.put('content', rec).catch(() => {});
   return rec;
 }
 export const removeContent = (id) => store.del('content', id).catch(() => {});
+
+/** Offline copies are kept for 30 days after you last opened them, then dropped. */
+export const OFFLINE_DAYS = 30;
+export async function touchContent(id) {
+  const c = await getContent(id);
+  if (c) await store.put('content', { ...c, openedAt: Date.now() }).catch(() => {});
+}
+export async function purgeExpiredContent(now = Date.now()) {
+  const limit = now - OFFLINE_DAYS * 864e5;
+  const all = await store.all('content').catch(() => []);
+  let n = 0;
+  for (const c of all) {
+    if ((c.openedAt || c.savedAt || 0) < limit) { await store.del('content', c.id).catch(() => {}); n++; }
+  }
+  return n;
+}
 
 /* ---------- reading position ---------- */
 export const getProgress = (id) => store.get('progress', id).catch(() => undefined);

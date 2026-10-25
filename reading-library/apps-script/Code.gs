@@ -2,7 +2,7 @@
  * Reading Library: Database API
  * Google Apps Script Web App (container-bound to the "Reading Library" Sheet)
  *
- * Tabs:   Articles, Highlights
+ * Tabs:   Articles, Highlights, Sources
  * Auth:   every request must carry the secret in Script Property API_TOKEN
  *         (GET: ?token=...   POST: {"token": "...", "action": "...", "data": ...})
  *
@@ -14,6 +14,7 @@
  * GET  ?token=T&what=highlights[&since=ISO]     -> all highlights (or changed since)
  * GET  ?token=T&what=pending[&limit=3]          -> articles still waiting for AI classification
  * GET  ?token=T&what=categories                 -> [{name, count}] sorted by count
+ * GET  ?token=T&what=sources                    -> feed sources (created on first use)
  *
  * POST actions
  *   add                data: article | [article]          (dedupes by normalised URL)
@@ -22,12 +23,16 @@
  *   exists             data: {url} | {urls:[...]}
  *   upsert_highlights  data: highlight | [highlight]      (last-write-wins on updated_at)
  *   merge_category     data: {from, to}
+ *   add_source         data: source | [source]            (dedupes by feed_url)
+ *   update_source      data: {id, fields:{...}} | [ ... ]
+ *   delete_source      data: {id}                         (its articles stay)
  *   ping               -> {pong:true}
  * ---------------------------------------------------------------------------
  */
 
 var SHEET_ARTICLES = 'Articles';
 var SHEET_HIGHLIGHTS = 'Highlights';
+var SHEET_SOURCES = 'Sources';
 
 var ARTICLE_COLS = [
   'id', 'date_added', 'title', 'author_source', 'url', 'category', 'tags',
@@ -37,6 +42,15 @@ var ARTICLE_COLS = [
 var HIGHLIGHT_COLS = [
   'id', 'article_id', 'quote', 'prefix', 'suffix', 'note', 'color',
   'created_at', 'updated_at', 'deleted', 'device'
+];
+
+var SOURCE_COLS = [
+  'id', 'name', 'feed_url', 'site_url', 'active', 'long_only', 'min_minutes',
+  'added_at', 'last_fetched', 'last_status', 'last_found', 'total_added'
+];
+var UPDATABLE_SOURCE_FIELDS = [
+  'name', 'feed_url', 'site_url', 'active', 'long_only', 'min_minutes',
+  'last_fetched', 'last_status', 'last_found', 'total_added'
 ];
 
 var VALID_STATUS = ['Unread', 'Reading', 'Finished', 'Archive'];
@@ -86,6 +100,10 @@ function doGet(e) {
         .sort(function (a, b) { return b.count - a.count; });
       return json_({ ok: true, data: list });
     }
+    if (what === 'sources') {
+      sourcesSheet_();
+      return json_({ ok: true, data: readAll_(SHEET_SOURCES).map(sourceOut_) });
+    }
     return json_({ ok: false, error: 'Unknown "what": ' + what });
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
@@ -114,6 +132,9 @@ function doPost(e) {
       case 'exists':            result = actionExists_(data); break;
       case 'upsert_highlights': result = actionUpsertHighlights_(data); break;
       case 'merge_category':    result = actionMergeCategory_(data); break;
+      case 'add_source':        result = actionAddSource_(data); break;
+      case 'update_source':     result = actionUpdateSource_(data); break;
+      case 'delete_source':     result = actionDeleteSource_(data); break;
       default: throw new Error('Unknown action: ' + action);
     }
     return json_({ ok: true, data: result });
@@ -122,6 +143,91 @@ function doPost(e) {
   } finally {
     if (locked) lock.releaseLock();
   }
+}
+
+/* ================================ SOURCES ================================= */
+
+/** The Sources tab is created on first use, so no extra setup step is needed. */
+function sourcesSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss.getSheetByName(SHEET_SOURCES)) ensureTab_(ss, SHEET_SOURCES, SOURCE_COLS);
+  return ss.getSheetByName(SHEET_SOURCES);
+}
+
+function sourceOut_(r) {
+  var o = {};
+  Object.keys(r).forEach(function (k) { o[k] = r[k]; });
+  o.active = String(r.active).toLowerCase() !== 'false';
+  o.long_only = String(r.long_only).toLowerCase() === 'true';
+  o.min_minutes = Number(r.min_minutes) || 0;
+  o.last_found = r.last_found === '' ? null : Number(r.last_found);
+  o.total_added = Number(r.total_added) || 0;
+  return o;
+}
+
+function actionAddSource_(data) {
+  var items = Array.isArray(data) ? data : [data];
+  var sheet = sourcesSheet_();
+  var hdr = headers_(sheet);
+  var existing = readAll_(SHEET_SOURCES);
+  var byUrl = {};
+  existing.forEach(function (r) { byUrl[normalizeUrl_(r.feed_url)] = r.id; });
+  var now = new Date().toISOString();
+  var rows = [];
+  var results = [];
+  items.forEach(function (it) {
+    if (!it || !it.feed_url || !it.name) { results.push({ ok: false, error: 'name and feed_url are required' }); return; }
+    var key = normalizeUrl_(it.feed_url);
+    if (byUrl[key]) { results.push({ ok: true, id: byUrl[key], duplicate: true }); return; }
+    var id = newId_();
+    byUrl[key] = id;
+    var rec = {
+      id: id, name: it.name, feed_url: it.feed_url, site_url: it.site_url || '',
+      active: it.active === false ? 'false' : 'true',
+      long_only: it.long_only ? 'true' : 'false',
+      min_minutes: it.min_minutes || '',
+      added_at: now, last_fetched: '', last_status: '', last_found: '', total_added: 0
+    };
+    rows.push(hdr.map(function (h) { return cell_(rec[h]); }));
+    results.push({ ok: true, id: id });
+  });
+  appendRows_(sheet, hdr, rows);
+  return { results: results };
+}
+
+function actionUpdateSource_(data) {
+  var items = Array.isArray(data) ? data : [data];
+  var sheet = sourcesSheet_();
+  var hdr = headers_(sheet);
+  var rowById = idRowMap_(sheet, hdr);
+  var updated = [];
+  items.forEach(function (it) {
+    if (!it || !it.id) return;
+    var row = rowById[String(it.id)];
+    if (!row) return;
+    var fields = it.fields || {};
+    Object.keys(fields).forEach(function (k) {
+      if (UPDATABLE_SOURCE_FIELDS.indexOf(k) < 0) return;
+      var col = hdr.indexOf(k) + 1;
+      if (col < 1) return;
+      var v = fields[k];
+      if (typeof v === 'boolean') v = v ? 'true' : 'false';
+      var cell = sheet.getRange(row, col);
+      cell.setNumberFormat('@');
+      cell.setValue(cell_(v));
+    });
+    updated.push(it.id);
+  });
+  return { updated: updated };
+}
+
+function actionDeleteSource_(data) {
+  var sheet = sourcesSheet_();
+  var hdr = headers_(sheet);
+  var row = idRowMap_(sheet, hdr)[String(data && data.id)];
+  if (!row) return { deleted: false };
+  sheet.deleteRow(row);
+  return { deleted: true };
 }
 
 /* ================================ ACTIONS ================================= */
@@ -474,6 +580,7 @@ function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureTab_(ss, SHEET_ARTICLES, ARTICLE_COLS);
   ensureTab_(ss, SHEET_HIGHLIGHTS, HIGHLIGHT_COLS);
+  ensureTab_(ss, SHEET_SOURCES, SOURCE_COLS);
 
   var props = PropertiesService.getScriptProperties();
   if (!props.getProperty('API_TOKEN')) {

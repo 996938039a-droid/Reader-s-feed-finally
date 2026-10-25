@@ -151,3 +151,41 @@ test('Code.gs and the Netlify side normalise URLs identically', () => {
   ];
   for (const u of urls) assert.equal(gs.normalizeUrl(u), normalizeUrl(u), u);
 });
+
+test('sources: tab is created on first use, add dedupes by feed URL, update and delete work', () => {
+  const gs = loadAppsScript(); // note: setup() NOT run, as for an existing user who only re-pasted Code.gs
+  gs.setup();
+  delete gs.sheets.Sources; // simulate an older Sheet without the tab
+  assert.deepEqual(gs.get({ token: T, what: 'sources' }).data, []);
+  assert.ok(gs.sheets.Sources, 'tab created automatically');
+
+  const a = gs.post({ token: T, action: 'add_source', data: { name: 'Quanta', feed_url: 'https://q.test/feed/', site_url: 'https://q.test', long_only: true, min_minutes: 6 } });
+  assert.equal(a.ok, true);
+  const id = a.data.results[0].id;
+  const dup = gs.post({ token: T, action: 'add_source', data: { name: 'Quanta again', feed_url: 'https://www.q.test/feed' } });
+  assert.equal(dup.data.results[0].duplicate, true);
+
+  const [src] = gs.get({ token: T, what: 'sources' }).data;
+  assert.equal(src.name, 'Quanta');
+  assert.equal(src.active, true);
+  assert.equal(src.long_only, true);
+  assert.equal(src.min_minutes, 6);
+
+  gs.post({ token: T, action: 'update_source', data: { id, fields: { active: false, last_status: 'OK', last_found: 12, total_added: 7, bogus: 'x' } } });
+  const [u] = gs.get({ token: T, what: 'sources' }).data;
+  assert.equal(u.active, false);
+  assert.equal(u.last_found, 12);
+  assert.equal(u.total_added, 7);
+  assert.equal(u.bogus, undefined);
+
+  assert.equal(gs.post({ token: T, action: 'delete_source', data: { id } }).data.deleted, true);
+  assert.deepEqual(gs.get({ token: T, what: 'sources' }).data, []);
+});
+
+test('sources: missing name or feed_url is rejected, articles are untouched by source changes', () => {
+  const gs = fresh();
+  gs.post({ token: T, action: 'add', data: { url: 'https://x.test/a', title: 'A', source_feed: 'Quanta' } });
+  const bad = gs.post({ token: T, action: 'add_source', data: { name: 'No url' } });
+  assert.equal(bad.data.results[0].ok, false);
+  assert.equal(gs.get({ token: T, what: 'articles' }).data.length, 1);
+});

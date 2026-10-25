@@ -1,10 +1,13 @@
 import { RateLimitError } from './gemini.js';
 import { friendlyError, materialForClassification } from './extract.js';
+import { loadSources } from './feeds.js';
 
 /** Marker text in last_error that tells the app to show the reading time as low confidence. */
 export const READING_TIME_NOTE = 'Reading time may be off (the page text looked short).';
 
-function fieldsFor(item, material, result) {
+export const SHORT_NOTE = 'Short piece, archived automatically (this source is set to long reads only).';
+
+function fieldsFor(item, material, result, source) {
   const fields = {
     category: result.category || 'Uncategorised',
     tags: result.tags,
@@ -19,7 +22,13 @@ function fieldsFor(item, material, result) {
   // Prefer the real title for PDFs and for rows saved with only a URL-derived title.
   const betterTitle = (material.title || result.title || '').trim();
   if (betterTitle && (!item.title || item.type === 'PDF' || item.title === item.url)) fields.title = betterTitle;
-  if (material.shortText && !material.thin) fields.last_error = READING_TIME_NOTE;
+  if (
+    source?.long_only && source.min_minutes && type === 'Article' && !material.thin && material.readingMinutes &&
+    material.readingMinutes < source.min_minutes && (!item.status || item.status === 'Unread')
+  ) {
+    fields.status = 'Archive';
+    fields.last_error = SHORT_NOTE;
+  } else if (material.shortText && !material.thin) fields.last_error = READING_TIME_NOTE;
   if (material.thin) {
     const basis = material.text ? 'the feed summary' : 'the title only';
     fields.last_error = material.fetchError
@@ -50,6 +59,7 @@ export async function processPending({
   fetchImpl = fetch,
   limit = 5,
   budgetMs = 24000,
+  sources,
   now = Date.now,
   log = () => {},
 }) {
@@ -128,11 +138,13 @@ export async function processPending({
     else batchError = err;
   }
 
+  // Only needed to archive short pieces from "long reads only" sources; a failure here changes nothing.
+  const srcList = sources ?? (done.size ? await loadSources(sheet, { seed: false }).catch(() => []) : []);
   for (const r of ready) {
     const out = done.get(r.item.id);
     if (out?.ok) {
       summary.processed++;
-      updates.push({ id: r.item.id, fields: fieldsFor(r.item, r.material, out.result) });
+      updates.push({ id: r.item.id, fields: fieldsFor(r.item, r.material, out.result, srcList.find((x) => x.name === r.item.source_feed)) });
     } else if (out) {
       summary.failed++;
       updates.push({ id: r.item.id, fields: { last_error: String(out.error || 'Not classified.').slice(0, 300) } });

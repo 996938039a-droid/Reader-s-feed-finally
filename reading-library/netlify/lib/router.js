@@ -1,7 +1,8 @@
 import { isAuthorised } from './auth.js';
 import { backupConfigured, missingConfig } from './config.js';
 import { extractForReader, friendlyError, quickMeta } from './extract.js';
-import { harvest } from './feeds.js';
+import { SUGGESTED_SOURCES, DEFAULT_SOURCES, discoverFeed, harvest, loadSources } from './feeds.js';
+import { defineWord } from './define.js';
 import { processPending } from './queue.js';
 import { assertPublicHttpUrl, json, sleep } from './util.js';
 
@@ -150,6 +151,65 @@ export async function handle(req, deps) {
         log,
       });
       return json({ ok: true, ...summary });
+    }
+
+    if (method === 'GET' && path === 'define') {
+      return json(await defineWord(url.searchParams.get('word') || '', { fetchImpl: deps.fetchImpl }));
+    }
+
+    if (method === 'GET' && path === 'sources') {
+      const [list, articles] = await Promise.all([loadSources(sheet), sheet.articles()]);
+      const counts = new Map();
+      for (const a of articles) if (a.source_feed) counts.set(a.source_feed, (counts.get(a.source_feed) || 0) + 1);
+      return json({
+        sources: list.map((s) => ({ ...s, article_count: counts.get(s.name) || 0 })),
+        suggestions: SUGGESTED_SOURCES,
+      });
+    }
+
+    if (method === 'POST' && path === 'sources/check') {
+      const body = await readBody(req);
+      return json(await discoverFeed(body.url, { fetchImpl: deps.fetchImpl }));
+    }
+
+    if (method === 'POST' && path === 'sources') {
+      // Find the feed, save it. Pulling its first articles is a separate call (sources/pull) so each step stays quick.
+      const body = await readBody(req);
+      const found = await discoverFeed(body.url, { fetchImpl: deps.fetchImpl });
+      if (!found.ok) return json({ ok: false, error: found.error }, 422);
+      const longOnly = body.long_only !== false;
+      const res = await sheet.addSource({
+        name: String(body.name || found.name).slice(0, 80),
+        feed_url: found.feedUrl,
+        site_url: found.siteUrl,
+        active: true,
+        long_only: longOnly,
+        min_minutes: longOnly ? Math.max(1, Math.min(60, Number(body.min_minutes) || 6)) : 0,
+      });
+      const r = res.results?.[0] || {};
+      return json({ ok: r.ok !== false, id: r.id, duplicate: !!r.duplicate, name: found.name, feedUrl: found.feedUrl, sample: found.items, longCount: found.longCount, total: found.total });
+    }
+
+    if (method === 'POST' && path === 'sources/pull') {
+      const body = await readBody(req);
+      if (!body.id) return json({ error: 'id is required' }, 400);
+      const report = await harvest({ sheet, cfg, fetchImpl: deps.fetchImpl, onlyId: body.id, log });
+      return json({ ok: true, report });
+    }
+
+    if (method === 'POST' && path === 'sources/update') {
+      const body = await readBody(req);
+      if (!body.id || !body.fields) return json({ error: 'id and fields are required' }, 400);
+      const ok = ['name', 'active', 'long_only', 'min_minutes'];
+      const fields = {};
+      for (const k of ok) if (body.fields[k] !== undefined) fields[k] = body.fields[k];
+      return json({ ok: true, ...(await sheet.updateSource([{ id: body.id, fields }])) });
+    }
+
+    if (method === 'POST' && path === 'sources/delete') {
+      const body = await readBody(req);
+      if (!body.id) return json({ error: 'id is required' }, 400);
+      return json({ ok: true, ...(await sheet.deleteSource(body.id)) });
     }
 
     if (method === 'POST' && path === 'harvest') {
