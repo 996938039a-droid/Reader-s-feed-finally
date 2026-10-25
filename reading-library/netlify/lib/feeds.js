@@ -138,9 +138,17 @@ export async function loadSources(sheet, { seed = true } = {}) {
   if (typeof sheet.sources !== 'function') return DEFAULT_SOURCES.map((d) => ({ ...d }));
   try {
     let list = await sheet.sources();
-    if (!list.length && seed) {
-      await sheet.addSource(DEFAULT_SOURCES);
-      list = await sheet.sources();
+    // The built-in five are copied in whenever none of them are present, even if you already added
+    // your own sources first. (Switch one Off rather than removing it, or removing all five brings them back.)
+    const have = new Set(list.map((s) => normalizeUrl(s.feed_url)));
+    const anyBuiltIn = DEFAULT_SOURCES.some((d) => have.has(normalizeUrl(d.feed_url)));
+    if (!anyBuiltIn && seed && typeof sheet.addSource === 'function') {
+      try {
+        await sheet.addSource(DEFAULT_SOURCES);
+        list = await sheet.sources();
+      } catch {
+        /* could not save them this time; keep the sources you have and try again next run */
+      }
     }
     return list;
   } catch {

@@ -882,7 +882,8 @@ test('router: sources list, add (discover + save), update whitelist, delete', as
   j = await (await handle(api('POST', 'sources', { body: { url: 'https://q.test/feed', min_minutes: 8 } }), d)).json();
   assert.equal(j.ok, true);
   assert.equal(j.id, 'new1');
-  assert.deepEqual([calls[0][1].long_only, calls[0][1].min_minutes, calls[0][1].feed_url], [true, 8, 'https://q.test/feed']);
+  const added = calls.filter((c) => c[0] === 'add').map((c) => c[1]).find((x) => !Array.isArray(x));
+  assert.deepEqual([added.long_only, added.min_minutes, added.feed_url], [true, 8, 'https://q.test/feed']);
 
   await handle(api('POST', 'sources/update', { body: { id: 's1', fields: { active: false, feed_url: 'https://evil.test', total_added: 99 } } }), d);
   assert.deepEqual(calls.find((c) => c[0] === 'update')[1], [{ id: 's1', fields: { active: false } }], 'only whitelisted fields');
@@ -944,4 +945,15 @@ test('router: /api/define', async () => {
   d.fetchImpl = fakeFetch([['dictionaryapi.dev', () => res(DICT)]]);
   const j = await (await handle(api('GET', 'define?word=serendipity'), d)).json();
   assert.equal(j.ok, true);
+});
+
+test('sources: the built-in five are added even when you added your own source first', async () => {
+  let stored = [{ id: 'q', name: 'Quanta Magazine', feed_url: 'https://www.quantamagazine.org/feed/', active: true }];
+  const sheet = { sources: async () => stored, addSource: async (items) => { stored = [...stored, ...items.map((i, n) => ({ id: 'd' + n, ...i }))]; } };
+  const list = await loadSources(sheet);
+  assert.deepEqual(list.map((s) => s.name), ['Quanta Magazine', 'Aeon', 'Noema', 'Works in Progress', 'Psyche', 'Nautilus']);
+  const again = await loadSources(sheet);
+  assert.equal(again.length, 6, 'not added a second time');
+  stored = stored.filter((s) => s.name !== 'Aeon');
+  assert.equal((await loadSources(sheet)).length, 5, 'removing one of the five does not bring it back');
 });
